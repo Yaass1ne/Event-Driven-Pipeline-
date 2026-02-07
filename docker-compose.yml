@@ -1,0 +1,307 @@
+x-spark-common: &spark-common
+  build:
+    context: ./spark
+    dockerfile: Dockerfile
+  user: root
+  volumes:
+    - lakehouse-data:/data/lakehouse
+    - spark-checkpoints:/data/checkpoints
+    - ./spark/jobs:/opt/spark-jobs
+  environment: &spark-env
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    LAKEHOUSE_PATH: /data/lakehouse
+    CHECKPOINT_PATH: /data/checkpoints
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: serving
+    POSTGRES_USER: platform
+    POSTGRES_PASSWORD: platform123
+    SPARK_HOME: /opt/spark
+  networks:
+    - platform-net
+
+services:
+  # ---------- Kafka + Zookeeper ----------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    hostname: zookeeper
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_OPTS: "-Dzookeeper.4lw.commands.whitelist=ruok,srvr"
+      KAFKA_HEAP_OPTS: "-Xmx128m -Xms64m"
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - platform-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms128m"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - platform-net
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.3
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      echo 'Creating Kafka topics...'
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic user-events --partitions 3 --replication-factor 1
+      echo 'Topics created successfully.'
+      kafka-topics --bootstrap-server kafka:9092 --list
+      "
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    networks:
+      - platform-net
+
+  # ---------- PostgreSQL (serving store + airflow metadata) ----------
+  postgres:
+    image: postgres:15-alpine
+    hostname: postgres
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform123
+      POSTGRES_DB: serving
+    command: postgres -c shared_buffers=64MB -c work_mem=4MB -c max_connections=50
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform -d serving"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+    networks:
+      - platform-net
+
+  # ---------- Streaming Jobs (local mode - no separate master/worker) ----------
+  spark-raw-landing:
+    <<: *spark-common
+    container_name: spark-raw-landing
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    command: ["bash", "-c", "sleep 15 && /opt/spark/bin/spark-submit --master 'local[2]' --driver-memory 512m --conf spark.sql.shuffle.partitions=2 --packages io.delta:delta-spark_2.12:3.1.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.driver.extraJavaOptions=-Divy.cache.dir=/tmp/.ivy2 /opt/spark-jobs/spark_raw_landing.py"]
+    deploy:
+      resources:
+        limits:
+          memory: 896M
+    restart: on-failure
+
+  spark-fast-agg:
+    <<: *spark-common
+    container_name: spark-fast-agg
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    command: ["bash", "-c", "sleep 20 && /opt/spark/bin/spark-submit --master 'local[2]' --driver-memory 512m --conf spark.sql.shuffle.partitions=2 --packages io.delta:delta-spark_2.12:3.1.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 --jars /opt/spark/extra-jars/postgresql-42.7.1.jar --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.driver.extraJavaOptions=-Divy.cache.dir=/tmp/.ivy2 /opt/spark-jobs/spark_fast_agg.py"]
+    deploy:
+      resources:
+        limits:
+          memory: 896M
+    restart: on-failure
+
+  # ---------- Grafana (Dashboard) ----------
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: on-failure
+    networks:
+      - platform-net
+
+  # ---------- Producer ----------
+  producer:
+    build:
+      context: ./producer
+      dockerfile: Dockerfile
+    container_name: producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: user-events
+      EVENTS_PER_SECOND: "5"
+      NUM_USERS: "100"
+    deploy:
+      resources:
+        limits:
+          memory: 48M
+    restart: on-failure
+    networks:
+      - platform-net
+
+  # ---------- Airflow ----------
+  airflow-init:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: &airflow-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://platform:platform123@postgres:5432/serving
+      AIRFLOW__CORE__FERNET_KEY: "zTvhk_5uELEhBMKBab3dVLRUZCjMBkEpGbNqj5GU1ac="
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      LAKEHOUSE_PATH: /data/lakehouse
+      CHECKPOINT_PATH: /data/checkpoints
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: serving
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform123
+    command: ["bash", "-c", "airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true"]
+    volumes:
+      - lakehouse-data:/data/lakehouse
+      - spark-checkpoints:/data/checkpoints
+      - ./airflow/dags:/opt/airflow/dags
+      - ./spark/jobs:/opt/spark-jobs
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - platform-net
+
+  airflow-webserver:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment: *airflow-env
+    ports:
+      - "8082:8080"
+    command: airflow webserver --port 8080
+    volumes:
+      - lakehouse-data:/data/lakehouse
+      - spark-checkpoints:/data/checkpoints
+      - ./airflow/dags:/opt/airflow/dags
+      - ./spark/jobs:/opt/spark-jobs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+    restart: on-failure
+    networks:
+      - platform-net
+
+  airflow-scheduler:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    container_name: airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment: *airflow-env
+    command: airflow scheduler
+    volumes:
+      - lakehouse-data:/data/lakehouse
+      - spark-checkpoints:/data/checkpoints
+      - ./airflow/dags:/opt/airflow/dags
+      - ./spark/jobs:/opt/spark-jobs
+    deploy:
+      resources:
+        limits:
+          memory: 1280M
+    restart: on-failure
+    networks:
+      - platform-net
+
+volumes:
+  lakehouse-data:
+  spark-checkpoints:
+  postgres-data:
+  grafana-data:
+
+networks:
+  platform-net:
+    driver: bridge

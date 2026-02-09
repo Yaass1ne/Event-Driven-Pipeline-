@@ -22,6 +22,12 @@ RUN mkdir -p /opt/spark/extra-jars && \
 ENV SPARK_HOME=/opt/spark
 ENV PATH="${SPARK_HOME}/bin:${PATH}"
 
+# Create lakehouse directory structure with proper permissions
+RUN mkdir -p /data/lakehouse/bronze /data/lakehouse/silver /data/lakehouse/gold \
+             /data/checkpoints && \
+    chown -R airflow:root /data/lakehouse /data/checkpoints && \
+    chmod -R 775 /data/lakehouse /data/checkpoints
+
 USER airflow
 
 RUN pip install --no-cache-dir \

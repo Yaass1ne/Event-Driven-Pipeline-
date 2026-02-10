@@ -14,25 +14,23 @@ RUN curl -fSL https://archive.apache.org/dist/spark/spark-3.5.1/spark-3.5.1-bin-
     | tar -xz -C /opt/ && \
     ln -s /opt/spark-3.5.1-bin-hadoop3 /opt/spark
 
-# PostgreSQL JDBC driver
+# MySQL and ClickHouse drivers
 RUN mkdir -p /opt/spark/extra-jars && \
-    curl -fSL https://jdbc.postgresql.org/download/postgresql-42.7.1.jar \
-         -o /opt/spark/extra-jars/postgresql-42.7.1.jar
+    curl -fSL https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.2.0/mysql-connector-j-8.2.0.jar \
+         -o /opt/spark/extra-jars/mysql-connector-j-8.2.0.jar && \
+    curl -fSL https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.6.0/clickhouse-jdbc-0.6.0-all.jar \
+         -o /opt/spark/extra-jars/clickhouse-jdbc-0.6.0-all.jar
 
 ENV SPARK_HOME=/opt/spark
 ENV PATH="${SPARK_HOME}/bin:${PATH}"
-
-# Create lakehouse directory structure with proper permissions
-RUN mkdir -p /data/lakehouse/bronze /data/lakehouse/silver /data/lakehouse/gold \
-             /data/checkpoints && \
-    chown -R airflow:root /data/lakehouse /data/checkpoints && \
-    chmod -R 775 /data/lakehouse /data/checkpoints
 
 USER airflow
 
 RUN pip install --no-cache-dir \
     apache-airflow-providers-apache-spark==4.7.1 \
+    apache-airflow-providers-mysql \
+    clickhouse-driver==0.2.6 \
     delta-spark==3.1.0 \
-    psycopg2-binary==2.9.9
+    mysqlclient
 
 COPY dags/ /opt/airflow/dags/

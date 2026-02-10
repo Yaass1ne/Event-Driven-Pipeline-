@@ -78,7 +78,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT dau_count FROM gold.daily_active_users ORDER BY event_date DESC LIMIT 1",
+          "rawSql": "SELECT dau_count AS \"Daily Active Users\" FROM gold.daily_active_users ORDER BY event_date DESC LIMIT 1",
           "refId": "A",
           "select": [
             [
@@ -167,7 +167,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT ROUND(conversion_rate * 100, 2) as value FROM gold.conversion_rate_daily ORDER BY event_date DESC LIMIT 1",
+          "rawSql": "SELECT ROUND(conversion_rate * 100, 2) AS \"Conversion Rate\" FROM gold.conversion_rate_daily ORDER BY event_date DESC LIMIT 1",
           "refId": "A",
           "select": [
             [
@@ -248,7 +248,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT total_purchases FROM gold.conversion_rate_daily ORDER BY event_date DESC LIMIT 1",
+          "rawSql": "SELECT total_purchases AS \"Total Purchases\" FROM gold.conversion_rate_daily ORDER BY event_date DESC LIMIT 1",
           "refId": "A",
           "select": [
             [
@@ -329,7 +329,7 @@
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT SUM(event_count) as value FROM gold.events_per_source_daily WHERE event_date = CURRENT_DATE",
+          "rawSql": "SELECT SUM(event_count) AS \"Total Events\" FROM gold.events_per_source_daily WHERE event_date = CURRENT_DATE",
           "refId": "A",
           "select": [
             [
@@ -545,7 +545,7 @@
           "group": [],
           "metricColumn": "source",
           "rawQuery": true,
-          "rawSql": "SELECT\n  window_start as time,\n  source as metric,\n  login_count as value\nFROM realtime.logins_per_source\nWHERE window_start >= NOW() - INTERVAL '1 hour'\nORDER BY window_start",
+          "rawSql": "SELECT\n  window_start as time,\n  source as metric,\n  login_count as value\nFROM realtime.logins_per_source\nWHERE $__timeFilter(window_start)\nORDER BY window_start",
           "refId": "A",
           "select": [
             [
@@ -567,7 +567,7 @@
           ]
         }
       ],
-      "title": "Logins Per Source (Last Hour)",
+      "title": "Logins Per Source (Real-Time)",
       "type": "timeseries"
     },
     {
@@ -727,7 +727,7 @@
           ]
         }
       ],
-      "title": "Top Pages by Purchases",
+      "title": "Top Pages Visited",
       "type": "table"
     }
   ],

@@ -1,5 +1,5 @@
 """
-Spark Structured Streaming: Kafka -> PostgreSQL (real-time aggregates)
+Spark Structured Streaming: Kafka -> ClickHouse (real-time aggregates)
 Computes windowed aggregates with watermarks and writes to serving store.
 - Events per minute by event_type
 - Logins per source per minute
@@ -15,6 +15,7 @@ from pyspark.sql.functions import (
     current_timestamp,
     from_json,
     window,
+    sum as spark_sum,
 )
 from pyspark.sql.types import (
     IntegerType,
@@ -27,17 +28,14 @@ from pyspark.sql.types import (
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH", "/data/checkpoints")
 
-PG_HOST = os.getenv("POSTGRES_HOST", "postgres")
-PG_PORT = os.getenv("POSTGRES_PORT", "5432")
-PG_DB = os.getenv("POSTGRES_DB", "serving")
-PG_USER = os.getenv("POSTGRES_USER", "platform")
-PG_PASSWORD = os.getenv("POSTGRES_PASSWORD", "platform123")
+CH_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse")
+CH_PORT = os.getenv("CLICKHOUSE_PORT", "8123")
+CH_DB = os.getenv("CLICKHOUSE_DB", "default")
 
-PG_URL = f"jdbc:postgresql://{PG_HOST}:{PG_PORT}/{PG_DB}"
-PG_PROPERTIES = {
-    "user": PG_USER,
-    "password": PG_PASSWORD,
-    "driver": "org.postgresql.Driver",
+CH_URL = f"jdbc:clickhouse://{CH_HOST}:{CH_PORT}/{CH_DB}"
+CH_PROPERTIES = {
+    "driver": "com.clickhouse.jdbc.ClickHouseDriver",
+    # "ssl": "false" 
 }
 
 EVENT_SCHEMA = StructType([
@@ -47,28 +45,34 @@ EVENT_SCHEMA = StructType([
     StructField("page", StringType(), True),
     StructField("timestamp", StringType(), False),
     StructField("source", StringType(), False),
+    # E-commerce fields
+    StructField("session_id", StringType(), False),
+    StructField("price", StringType(), True),
+    StructField("category", StringType(), True),
+    StructField("product_id", StringType(), True),
 ])
 
 
-def write_to_postgres(batch_df, batch_id, table_name):
-    """Write a micro-batch to PostgreSQL, appending new data for time-series visualization."""
+def write_to_clickhouse(batch_df, batch_id, table_name):
+    """Write a micro-batch to ClickHouse."""
     if batch_df.isEmpty():
         return
     enriched = batch_df.withColumn("updated_at", current_timestamp())
     (
         enriched.write
         .mode("append")
-        .jdbc(PG_URL, table_name, properties=PG_PROPERTIES)
+        .jdbc(CH_URL, table_name, properties=CH_PROPERTIES)
     )
 
 
 def main():
     spark = (
         SparkSession.builder
-        .appName("fast-agg-kafka-to-postgres")
+        .appName("fast-agg-kafka-to-clickhouse")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-        .config("spark.jars", "/opt/spark/extra-jars/postgresql-42.7.1.jar")
+        # Ensure the jar name matches exactly what we downloaded in Dockerfile
+        .config("spark.jars", "/opt/spark/extra-jars/clickhouse-jdbc-0.6.0-all.jar")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
@@ -96,6 +100,11 @@ def main():
             col("data.page"),
             col("data.timestamp").cast(TimestampType()).alias("event_timestamp"),
             col("data.source"),
+            # E-commerce fields
+            col("data.session_id"),
+            col("data.price").cast("double").alias("price"),
+            col("data.category"),
+            col("data.product_id"),
         )
         .withWatermark("event_timestamp", "2 minutes")
     )
@@ -119,34 +128,34 @@ def main():
     q1 = (
         events_per_min.writeStream
         .outputMode("update")
-        .foreachBatch(lambda df, bid: write_to_postgres(df, bid, "realtime.events_per_minute"))
+        .foreachBatch(lambda df, bid: write_to_clickhouse(df, bid, "realtime.events_per_minute"))
         .option("checkpointLocation", f"{CHECKPOINT_PATH}/fast_agg_events_per_min")
         .trigger(processingTime="30 seconds")
         .start()
     )
 
-    # ----- Aggregate 2: Logins per source per minute -----
-    logins_per_source = (
+    # ----- Aggregate 2: Real-time Revenue per minute (REPLACES logins_per_source) -----
+    revenue_per_min = (
         parsed_df
-        .filter(col("event_type") == "login")
-        .groupBy(
-            window(col("event_timestamp"), "1 minute"),
-            col("source"),
+        .filter(col("event_type") == "purchase")
+        .groupBy(window(col("event_timestamp"), "1 minute"))
+        .agg(
+            spark_sum("price").alias("revenue"),
+            count("*").alias("purchase_count"),
         )
-        .agg(count("*").alias("login_count"))
         .select(
             col("window.start").alias("window_start"),
             col("window.end").alias("window_end"),
-            col("source"),
-            col("login_count"),
+            col("revenue"),
+            col("purchase_count"),
         )
     )
 
     q2 = (
-        logins_per_source.writeStream
+        revenue_per_min.writeStream
         .outputMode("update")
-        .foreachBatch(lambda df, bid: write_to_postgres(df, bid, "realtime.logins_per_source"))
-        .option("checkpointLocation", f"{CHECKPOINT_PATH}/fast_agg_logins_per_source")
+        .foreachBatch(lambda df, bid: write_to_clickhouse(df, bid, "realtime.revenue_per_minute"))
+        .option("checkpointLocation", f"{CHECKPOINT_PATH}/fast_agg_revenue_per_min")
         .trigger(processingTime="30 seconds")
         .start()
     )
@@ -167,13 +176,47 @@ def main():
     q3 = (
         purchases_per_min.writeStream
         .outputMode("update")
-        .foreachBatch(lambda df, bid: write_to_postgres(df, bid, "realtime.purchases_per_minute"))
+        .foreachBatch(lambda df, bid: write_to_clickhouse(df, bid, "realtime.purchases_per_minute"))
         .option("checkpointLocation", f"{CHECKPOINT_PATH}/fast_agg_purchases_per_min")
         .trigger(processingTime="30 seconds")
         .start()
     )
 
-    print("Fast-agg streaming queries started (3 aggregate streams)")
+    # ----- Aggregate 4: Category Velocity (purchases per category per minute) -----
+    category_velocity = (
+        parsed_df
+        .filter(col("event_type") == "purchase")
+        .groupBy(
+            window(col("event_timestamp"), "1 minute"),
+            col("category"),
+        )
+        .agg(
+            count("*").alias("purchase_count"),
+            spark_sum("price").alias("revenue"),
+        )
+        .select(
+            col("window.start").alias("window_start"),
+            col("window.end").alias("window_end"),
+            col("category"),
+            col("purchase_count"),
+            col("revenue"),
+        )
+    )
+
+    q4 = (
+        category_velocity.writeStream
+        .outputMode("update")
+        .foreachBatch(lambda df, bid: write_to_clickhouse(df, bid, "realtime.category_velocity"))
+        .option("checkpointLocation", f"{CHECKPOINT_PATH}/fast_agg_category_velocity")
+        .trigger(processingTime="30 seconds")
+        .start()
+    )
+
+    print("Fast-agg streaming queries started (4 aggregate streams) -> ClickHouse")
+    print("  1. Events per minute by type")
+    print("  2. Revenue per minute")
+    print("  3. Purchases per minute")
+    print("  4. Category velocity")
     spark.streams.awaitAnyTermination()
 
 

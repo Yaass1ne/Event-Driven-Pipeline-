@@ -17,8 +17,9 @@ LAKEHOUSE_PATH = os.getenv("LAKEHOUSE_PATH", "/data/lakehouse")
 BRONZE_PATH = f"{LAKEHOUSE_PATH}/bronze/user_events"
 SILVER_PATH = f"{LAKEHOUSE_PATH}/silver/user_events"
 
-VALID_EVENT_TYPES = ["login", "click", "purchase", "logout"]
+VALID_EVENT_TYPES = ["login", "view", "add_to_cart", "purchase", "logout"]
 VALID_SOURCES = ["web", "mobile"]
+VALID_CATEGORIES = ["Electronics", "Fashion", "Home", "Books", "Sports", "Beauty", "Toys", "Food"]
 
 
 def main():
@@ -55,6 +56,7 @@ def main():
             & col("event_type").isNotNull()
             & col("event_timestamp").isNotNull()
             & col("source").isNotNull()
+            & col("session_id").isNotNull()  # E-commerce: session required
         )
         # Validate event_type
         .filter(col("event_type").isin(VALID_EVENT_TYPES))
@@ -62,6 +64,24 @@ def main():
         .filter(col("source").isin(VALID_SOURCES))
         # Validate user_id > 0
         .filter(col("user_id") > 0)
+        # E-commerce: Validate category (if present, must be in valid list)
+        .filter(
+            col("category").isNull() | col("category").isin(VALID_CATEGORIES)
+        )
+        # E-commerce: Validate price (if present, must be positive)
+        .filter(
+            col("price").isNull() | (col("price") > 0)
+        )
+        # E-commerce: Contextual validation - purchases MUST have product data
+        .filter(
+            (col("event_type") != "purchase") |
+            (
+                (col("event_type") == "purchase") &
+                col("price").isNotNull() &
+                col("product_id").isNotNull() &
+                col("category").isNotNull()
+            )
+        )
     )
 
     # --- Deduplicate by event_id (keep first by ingestion_timestamp) ---

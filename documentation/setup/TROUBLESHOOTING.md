@@ -47,15 +47,15 @@ docker compose restart kafka
 ### Grafana Dashboard Issues
 
 #### "No Data" on All Panels
-**Cause:** PostgreSQL not populated yet or Grafana can't connect
+**Cause:** ClickHouse not populated yet or Grafana can't connect
 **Solution:**
 ```bash
-# 1. Check PostgreSQL is running
-docker compose ps postgres
+# 1. Check ClickHouse is running
+docker compose ps clickhouse
 
 # 2. Verify data exists
-docker compose exec postgres psql -U platform -d serving -c \
-  "SELECT COUNT(*) FROM realtime.events_per_minute;"
+docker compose exec clickhouse clickhouse-client --query \
+  "SELECT count(*) FROM realtime.events_per_minute"
 
 # 3. Check Grafana logs
 docker compose logs grafana
@@ -64,13 +64,12 @@ docker compose logs grafana
 docker compose restart grafana
 ```
 
-#### Conversion Rate Panel Shows Error
-**Cause:** PostgreSQL ROUND() function type mismatch (should be fixed in latest version)
+#### "Bad Request" or "Query Error"
+**Cause:** Invalid SQL syntax for ClickHouse (e.g. using PostgreSQL functions like `NOW()` instead of `now()`)
 **Solution:**
-```bash
-# Update dashboard to latest version
-docker compose restart grafana
-```
+- Click "Edit" on the panel
+- Check the generated SQL
+- Ensure it uses ClickHouse syntax (e.g. `toStartOfMinute`, `now()`)
 
 #### Charts Show Old Data
 **Cause:** Grafana caching
@@ -117,6 +116,25 @@ docker compose logs airflow-scheduler | grep -i "spark"
 docker compose restart airflow-scheduler
 ```
 
+#### Cannot Delete DAG Run from UI
+**Symptoms:** Failed DAG runs that won't delete via Airflow UI, very long-running tasks
+**Solution:**
+```bash
+# 1. List DAG runs to find the run_id
+docker exec --user airflow airflow-scheduler airflow dags list-runs -d lakehouse_batch_pipeline --no-backfill
+
+# 2. Delete directly from MySQL database
+# Replace <run_id> with the actual run_id (e.g., scheduled__2026-02-10T18:00:00+00:00)
+docker exec mysql mysql -uplatform -pplatform123 serving -e \
+  "DELETE FROM dag_run WHERE dag_id = 'lakehouse_batch_pipeline' AND run_id = '<run_id>';"
+
+# 3. Verify deletion
+docker exec --user airflow airflow-scheduler airflow dags list-runs -d lakehouse_batch_pipeline --no-backfill | grep "<run_id>"
+# Should return no results
+
+# Note: Use --user airflow for airflow CLI commands, not root
+```
+
 ---
 
 ### Streaming Job Issues
@@ -129,8 +147,8 @@ docker compose restart airflow-scheduler
 docker compose logs spark-fast-agg
 docker compose logs spark-raw-landing
 
-# Common issue: ClassCastException
-# Fix: Already handled with local[2] mode
+# Common issue: ClassCastException or JDBC Driver missing
+# Fix: Ensure correct jars are in /opt/spark/extra-jars
 
 # Restart the job
 docker compose restart spark-fast-agg
@@ -154,15 +172,15 @@ docker compose exec kafka kafka-console-consumer \
   --max-messages 10
 ```
 
-#### Events Not Reaching PostgreSQL
-**Symptoms:** Kafka has data, but PostgreSQL tables empty
+#### Events Not Reaching ClickHouse
+**Symptoms:** Kafka has data, but ClickHouse tables empty
 **Solution:**
 ```bash
 # Check Spark fast-agg logs
 docker compose logs spark-fast-agg | tail -50
 
-# Verify PostgreSQL connection
-docker compose exec postgres psql -U platform -d serving -c "\dt realtime.*"
+# Verify ClickHouse connection
+docker compose exec clickhouse clickhouse-client --query "SHOW DATABASES"
 
 # Restart streaming job
 docker compose restart spark-fast-agg
@@ -170,23 +188,59 @@ docker compose restart spark-fast-agg
 
 ---
 
+### ClickHouse Data Quality Issues
+
+#### Duplicate Data in Grafana Charts
+**Symptoms:** Grafana charts show duplicate bars/values for the same day, multiple rows for same date in gold tables
+**Cause:** Missing `clickhouse-driver` Python module prevents DELETE/OPTIMIZE operations in `spark_silver_to_gold.py`
+**Solution:**
+```bash
+# 1. Install clickhouse-driver in Airflow containers
+docker exec --user airflow airflow-scheduler python3 -m pip install --user clickhouse-driver==0.2.6
+docker exec --user airflow airflow-webserver python3 -m pip install --user clickhouse-driver==0.2.6
+
+# 2. Verify installation
+docker exec --user airflow airflow-scheduler python3 -c "import clickhouse_driver; print('✅ clickhouse_driver version:', clickhouse_driver.__version__)"
+
+# 3. Check for duplicates
+docker exec clickhouse clickhouse-client --query \
+  "SELECT event_date, category, COUNT(*) as count FROM gold.category_sales_daily GROUP BY event_date, category HAVING COUNT(*) > 1"
+
+# 4. If duplicates exist, clean and re-run
+docker exec clickhouse clickhouse-client --query "TRUNCATE TABLE gold.category_sales_daily"
+docker exec clickhouse clickhouse-client --query "TRUNCATE TABLE gold.revenue_daily"
+docker exec clickhouse clickhouse-client --query "TRUNCATE TABLE gold.conversion_rate_daily"
+docker exec clickhouse clickhouse-client --query "TRUNCATE TABLE gold.cart_abandonment_daily"
+
+# 5. Trigger fresh DAG run
+docker exec --user airflow airflow-scheduler airflow dags trigger lakehouse_batch_pipeline
+
+# 6. Force Grafana refresh (Ctrl+Shift+R in browser)
+```
+
+**Permanent Fix:** Ensure `clickhouse-driver` is in `airflow/Dockerfile` requirements and rebuild:
+```bash
+docker compose down
+docker compose build airflow-scheduler airflow-webserver
+docker compose up -d
+```
+
+---
+
 ### Database Issues
 
-#### Can't Connect to PostgreSQL
+#### Can't Connect to ClickHouse
 **Cause:** Port blocked, service not healthy, or wrong credentials
 **Solution:**
 ```bash
-# Check PostgreSQL status
-docker compose ps postgres
+# Check ClickHouse status
+docker compose ps clickhouse
 
-# Check PostgreSQL logs
-docker compose logs postgres
+# Check ClickHouse logs
+docker compose logs clickhouse
 
-# Test connection
-docker compose exec postgres psql -U platform -d serving -c "SELECT 1;"
-
-# Verify port mapping
-docker compose port postgres 5432
+# Test connection via HTTP
+curl 'http://localhost:8123/?query=SELECT%201'
 ```
 
 #### Tables Missing
@@ -194,28 +248,14 @@ docker compose port postgres 5432
 **Solution:**
 ```bash
 # Check if init script ran
-docker compose logs postgres | grep "init.sql"
+docker compose logs clickhouse | grep "init.sql"
 
 # Manually run init script
-docker compose exec postgres psql -U platform -d serving -f /docker-entrypoint-initdb.d/01-init.sql
+cat sql/clickhouse_init.sql | docker compose exec -T clickhouse clickhouse-client
 
-# Or recreate database
+# Or recreate database container volume
 docker compose down -v
-docker compose up -d postgres
-```
-
-#### Query Performance Slow
-**Cause:** Large data accumulation
-**Solution:**
-```bash
-# Check table sizes
-docker compose exec postgres psql -U platform -d serving -c \
-  "SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size
-   FROM pg_tables
-   WHERE schemaname IN ('realtime', 'gold')
-   ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;"
-
-# Archive old data if needed (manual cleanup)
+docker compose up -d clickhouse
 ```
 
 ---
@@ -305,34 +345,3 @@ producer:
 docker exec spark-raw-landing sh -c "rm -rf /data/checkpoints/*"
 docker compose restart spark-raw-landing spark-fast-agg
 ```
-
----
-
-## Getting Help
-
-1. **Check logs first:**
-   ```bash
-   docker compose logs <service-name> | tail -100
-   ```
-
-2. **Verify service health:**
-   ```bash
-   docker compose ps
-   ```
-
-3. **Check resource usage:**
-   ```bash
-   docker stats
-   ```
-
-4. **Full restart:**
-   ```bash
-   docker compose down
-   docker compose up -d
-   ```
-
-5. **Nuclear option (clean slate):**
-   ```bash
-   docker compose down -v
-   docker compose up -d --build
-   ```

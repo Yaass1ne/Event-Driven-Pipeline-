@@ -25,7 +25,7 @@ This lakehouse platform implements a **Lambda Architecture** pattern with both *
       │                          │
       ▼                          ▼
 ┌─────────────┐          ┌─────────────┐
-│ Delta Lake  │          │ PostgreSQL  │
+│ Delta Lake  │          │ ClickHouse  │
 │ Bronze      │          │ realtime.*  │
 └─────────────┘          └─────────────┘
       │                          │
@@ -43,7 +43,7 @@ This lakehouse platform implements a **Lambda Architecture** pattern with both *
       │                          │
       ▼                          │
 ┌─────────────┐                  │
-│ PostgreSQL  │ ◄────────────────┘
+│ ClickHouse  │ ◄────────────────┘
 │   gold.*    │
 └─────────────┘
       │
@@ -60,16 +60,16 @@ This lakehouse platform implements a **Lambda Architecture** pattern with both *
 ### Path 1: Real-Time Streaming (Speed Layer)
 ```
 Producer → Kafka → Spark Raw Landing → Delta Bronze
-                → Spark Fast Agg → PostgreSQL (realtime schema)
+                → Spark Fast Agg → ClickHouse (realtime database)
 ```
 
-**Purpose:** Low-latency metrics updated every 30 seconds
+**Purpose:** Low-latency metrics updated every 10-30 seconds
 **Updates:** Minute-by-minute aggregations
-**Latency:** < 1 minute
+**Latency:** < 10 seconds
 
 ### Path 2: Batch Processing (Batch Layer)
 ```
-Delta Bronze → Airflow → Delta Silver → Delta Gold → PostgreSQL (gold schema)
+Delta Bronze → Airflow → Delta Silver → Delta Gold → ClickHouse (gold database)
 ```
 
 **Purpose:** Accurate, complete daily analytics
@@ -78,7 +78,7 @@ Delta Bronze → Airflow → Delta Silver → Delta Gold → PostgreSQL (gold sc
 
 ### Path 3: Serving (Presentation Layer)
 ```
-PostgreSQL (realtime + gold) → Grafana → User
+ClickHouse (realtime + gold) → Grafana → User
 ```
 
 **Purpose:** Unified view of real-time + historical data
@@ -120,7 +120,7 @@ PostgreSQL (realtime + gold) → Grafana → User
 
 #### Spark Fast Aggregation
 - **Input:** Kafka `user-events` topic
-- **Output:** PostgreSQL `realtime` schema
+- **Output:** ClickHouse `realtime` database
 - **Mode:** `local[2]` (in-process)
 - **Trigger:** Every 30 seconds
 - **Aggregations:**
@@ -156,33 +156,35 @@ PostgreSQL (realtime + gold) → Grafana → User
   - `purchases_per_page_daily` - Page-level purchase analysis
 - Size: 5-10 MB
 
-#### PostgreSQL
-**Schemas:**
+#### ClickHouse (OLAP Serving)
+**Databases:**
 
-**`realtime` schema:**
-- `events_per_minute` - Event counts by type per minute
-- `logins_per_source` - Login counts by source per minute
-- `purchases_per_minute` - Purchase counts per minute
-- Updated: Every 30 seconds
-- Retention: Unlimited (accumulates)
+**`realtime` database:**
+- `events_per_minute` (MergeTree)
+- `logins_per_source` (MergeTree)
+- `purchases_per_minute` (MergeTree)
+- Updated: Every 30 seconds via Spark JDBC
+- Engine: `MergeTree` for high-speed ingestion
 
-**`gold` schema:**
+**`gold` database:**
 - Mirror of Delta Gold layer
 - Updated: Daily via Airflow
-- Purpose: Fast queries for dashboards
+- Engine: `ReplacingMergeTree` (handles updates/deduplication)
+- Purpose: Sub-second queries for dashboards
 
 ### 4. Batch Orchestration
 
 #### Airflow
-- **DAG:** `lakehouse_bronze_to_gold`
+- **DAG:** `lakehouse_batch_dag`
 - **Schedule:** Daily (can be triggered manually)
+- **Metadata DB:** MySQL
 - **Tasks:**
   1. `bronze_to_silver` - Clean and validate Bronze data
   2. `silver_to_gold_dau` - Calculate Daily Active Users
   3. `silver_to_gold_conversion` - Calculate conversion rates
   4. `silver_to_gold_events_source` - Aggregate by source
   5. `silver_to_gold_purchases_page` - Aggregate by page
-  6. `gold_to_postgres` - Load Gold tables to PostgreSQL
+  6. `gold_to_clickhouse` - Load Gold tables to ClickHouse using JDBC
 
 **Executor:** LocalExecutor (single-node)
 **Dependencies:** Tasks run in sequence with defined order
@@ -196,7 +198,7 @@ PostgreSQL (realtime + gold) → Grafana → User
   - **Middle Row (Real-time):** Event Stream, Logins Per Source
   - **Bottom Row (Batch):** Top Pages by Purchases
 - **Refresh:** Auto-refresh every 10 seconds
-- **Data Sources:** PostgreSQL (`realtime` + `gold` schemas)
+- **Datasource:** ClickHouse Plugin (official)
 
 ---
 
@@ -214,31 +216,31 @@ PostgreSQL (realtime + gold) → Grafana → User
 }
 ```
 
-### Real-Time Tables
+### Real-Time Tables (ClickHouse)
 ```sql
--- events_per_minute
-window_start | event_type | event_count | updated_at
+-- events_per_minute (MergeTree)
+window_start DateTime, window_end DateTime, event_type String, event_count UInt64
 
--- logins_per_source
-window_start | source | login_count | updated_at
+-- logins_per_source (MergeTree)
+window_start DateTime, window_end DateTime, source String, login_count UInt64
 
--- purchases_per_minute
-window_start | purchase_count | updated_at
+-- purchases_per_minute (MergeTree)
+window_start DateTime, window_end DateTime, purchase_count UInt64
 ```
 
-### Gold Tables
+### Gold Tables (ClickHouse)
 ```sql
--- daily_active_users
-event_date | dau_count | updated_at
+-- daily_active_users (ReplacingMergeTree)
+event_date Date, dau_count Int64, updated_at DateTime
 
--- conversion_rate_daily
-event_date | conversion_rate | total_purchases | dau_count | updated_at
+-- conversion_rate_daily (ReplacingMergeTree)
+event_date Date, conversion_rate Float64, total_purchases Int64, dau_count Int64
 
--- events_per_source_daily
-event_date | source | event_count | updated_at
+-- events_per_source_daily (ReplacingMergeTree)
+event_date Date, source String, event_count Int64
 
--- purchases_per_page_daily
-event_date | page | purchase_count | updated_at
+-- purchases_per_page_daily (ReplacingMergeTree)
+event_date Date, page String, purchase_count Int64
 ```
 
 ---
@@ -251,7 +253,8 @@ event_date | page | purchase_count | updated_at
 | **Stream Processing** | Apache Spark | 3.5.1 | Real-time aggregations |
 | **Data Lake** | Delta Lake | 3.1.0 | ACID-compliant storage |
 | **Batch Orchestration** | Apache Airflow | 2.8.1 | Workflow management |
-| **Serving Database** | PostgreSQL | 15 | Fast query serving |
+| **Serving Database** | ClickHouse | 23.8 | Real-time OLAP |
+| **Metadata Database** | MySQL | 8.0 | Airflow metadata |
 | **Visualization** | Grafana | 10.2.0 | Dashboards |
 | **Container Runtime** | Docker Compose | - | Service orchestration |
 
@@ -259,34 +262,35 @@ event_date | page | purchase_count | updated_at
 
 ## Design Decisions
 
+### Why ClickHouse over PostgreSQL?
+- **Columnar Storage:** Lightning-fast aggregations on large datasets.
+- **Compression:** significantly reduces storage footprint.
+- **MergeTree Engine:** Designed for high-speed ingestion of time-series data.
+- **Scalability:** Horizontal scaling via sharding/replication (easier than Postgres).
+
 ### Why Delta Lake over Apache Iceberg?
 - **Native Spark integration** - First-class support in PySpark
 - **Simpler setup** - No additional catalog required
 - **Time travel** - Built-in versioning for debugging
 - **ACID guarantees** - Safe concurrent reads/writes
 
-### Why Local Mode for Spark?
-- **Memory efficiency** - No separate master/worker containers (~2GB saved)
-- **Avoids ClassCastException** - All JARs in same JVM
-- **Sufficient for demo** - 2 threads handle 5 events/sec easily
-
-### Why PostgreSQL for Serving?
-- **Fast queries** - Optimized for OLAP workloads
-- **Grafana integration** - Native datasource support
-- **Mature ecosystem** - Well-understood, reliable
+### Why MySQL for Airflow?
+- **Compatibility:** Official support in Airflow.
+- **Separation of Concerns:** Keeps metadata separate from analytical data (ClickHouse).
+- **Stability:** Proven reliability for transactional metadata workloads.
 
 ### Why Append Mode for Realtime Tables?
-- **Historical data** - Accumulates over time for trends
-- **Time-series charts** - Grafana needs multiple data points
-- **Duplicate handling** - Queries use GROUP BY SUM to merge
+- **ClickHouse Optimization:** ClickHouse prefers appends over updates.
+- **Aggregation on Read:** Queries use `SUM()` to aggregate micro-batches.
+- **Deduplication:** `ReplacingMergeTree` handles updates independently in background.
 
 ---
 
 ## Scaling Considerations
 
 ### Current Limits
-- **Throughput:** 5 events/sec (can handle 100+)
-- **Memory:** ~5-6 GB total
+- **Throughput:** 5 events/sec (can handle 1000+)
+- **Memory:** ~6-7 GB total
 - **Concurrency:** Single-node (all services on one machine)
 
 ### How to Scale
@@ -308,19 +312,9 @@ kafka-topics --bootstrap-server kafka:9092 \
 
 **Horizontal Scaling:**
 - Deploy Spark on a cluster (Kubernetes, YARN)
-- Use external PostgreSQL (RDS, CloudSQL)
-- Separate Airflow workers
+- Use ClickHouse Cloud or a cluster
+- Separate Airflow workers (Celery/Kubernetes Executor)
 - Use Kafka cluster (multiple brokers)
-
-**Vertical Scaling:**
-```yaml
-# Increase container memory
-spark-fast-agg:
-  deploy:
-    resources:
-      limits:
-        memory: 2G  # Increase from 896M
-```
 
 ---
 
@@ -331,24 +325,19 @@ spark-fast-agg:
 **Production Recommendations:**
 1. **Authentication:**
    - Enable Kafka SASL/SSL
-   - PostgreSQL SSL connections
+   - ClickHouse user/password and SSL
    - Airflow RBAC with LDAP/OAuth
    - Grafana OAuth integration
 
 2. **Authorization:**
    - Kafka ACLs per topic
-   - PostgreSQL row-level security
+   - ClickHouse RBAC (Role Based Access Control)
    - Airflow role-based permissions
 
 3. **Encryption:**
    - Kafka TLS encryption
-   - PostgreSQL TLS
-   - Encrypt data at rest (volumes)
-
-4. **Secrets Management:**
-   - Use Docker secrets (not environment variables)
-   - HashiCorp Vault integration
-   - AWS Secrets Manager
+   - Data at rest encryption
+   - Secure secrets management (Vault, AWS Secrets)
 
 ---
 
@@ -360,7 +349,7 @@ spark-fast-agg:
 - Docker logs for debugging
 
 ### Production Recommendations
-1. **Metrics:** Prometheus + Grafana for system metrics
+1. **Metrics:** Prometheus + Grafana for system metrics (Container/JVM stats)
 2. **Logging:** ELK/EFK stack (Elasticsearch, Logstash, Kibana)
 3. **Tracing:** Jaeger for distributed tracing
 4. **Alerting:** Grafana alerts + PagerDuty/Slack
@@ -371,21 +360,18 @@ spark-fast-agg:
 
 ### Current Backup Strategy
 - **Delta Lake:** Versioned (time travel to previous versions)
-- **PostgreSQL:** No automatic backups
+- **ClickHouse:** No automatic backups
 
 ### Recommended Strategy
 ```bash
-# Backup PostgreSQL
-docker compose exec postgres pg_dump -U platform serving > backup.sql
+# Backup ClickHouse
+clickhouse-backup create full_backup
 
 # Backup Delta Lake
 docker cp spark-raw-landing:/data/lakehouse ./lakehouse-backup
 
-# Restore PostgreSQL
-docker compose exec -T postgres psql -U platform serving < backup.sql
-
-# Restore Delta Lake
-docker cp ./lakehouse-backup spark-raw-landing:/data/lakehouse
+# Restore ClickHouse
+clickhouse-backup restore full_backup
 ```
 
 ---
@@ -397,11 +383,11 @@ docker cp ./lakehouse-backup spark-raw-landing:/data/lakehouse
 | Metric | Value |
 |--------|-------|
 | Event ingestion rate | 5 events/sec |
-| End-to-end latency (Kafka → PostgreSQL) | < 60 seconds |
+| End-to-end latency (Kafka → ClickHouse) | < 10 seconds |
 | Bronze write throughput | ~300 events/min → ~200 KB/min |
 | Spark micro-batch time | 5-10 seconds |
 | Airflow DAG execution | 2-3 minutes |
-| Grafana query time | < 100ms |
+| Grafana query time | < 20ms |
 | Dashboard refresh | 10 seconds |
 
 ---
@@ -412,7 +398,7 @@ docker cp ./lakehouse-backup spark-raw-landing:/data/lakehouse
 2. **Data Quality:** Implement Great Expectations for validation
 3. **Schema Evolution:** Add schema registry (Confluent/AWS Glue)
 4. **CDC:** Capture database changes with Debezium
-5. **API Layer:** Add REST API with FastAPI for programmatic access
+5. **API Layer:** Add REST API with FastAPI (ClickHouse driver)
 6. **Notebook Integration:** Add Jupyter for ad-hoc analysis
 7. **Partitioning:** Implement Z-ordering for faster queries
 8. **Compaction:** Auto-compact Delta tables periodically

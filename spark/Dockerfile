@@ -2,15 +2,16 @@ FROM apache/spark:3.5.1
 
 USER root
 
-# Install curl for downloading jars
+# Install curl and Python packages
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends curl python3-pip && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip3 install --no-cache-dir requests clickhouse-driver
 
-# PostgreSQL JDBC driver for fast-agg writes
+# ClickHouse JDBC driver
 RUN mkdir -p /opt/spark/extra-jars && \
-    curl -fSL https://jdbc.postgresql.org/download/postgresql-42.7.1.jar \
-         -o /opt/spark/extra-jars/postgresql-42.7.1.jar
+    curl -fSL https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.6.0/clickhouse-jdbc-0.6.0-all.jar \
+         -o /opt/spark/extra-jars/clickhouse-jdbc-0.6.0-all.jar
 
 # Pre-download ivy dependencies so spark-submit doesn't download at runtime
 RUN /opt/spark/bin/spark-shell \

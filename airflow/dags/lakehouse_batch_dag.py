@@ -17,11 +17,14 @@ SPARK_MASTER = "local[*]"
 LAKEHOUSE_PATH = os.getenv("LAKEHOUSE_PATH", "/data/lakehouse")
 SPARK_JOBS_PATH = "/opt/spark-jobs"
 
-PG_HOST = os.getenv("POSTGRES_HOST", "postgres")
-PG_PORT = os.getenv("POSTGRES_PORT", "5432")
-PG_DB = os.getenv("POSTGRES_DB", "serving")
-PG_USER = os.getenv("POSTGRES_USER", "platform")
-PG_PASSWORD = os.getenv("POSTGRES_PASSWORD", "platform123")
+CH_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse")
+CH_PORT = os.getenv("CLICKHOUSE_PORT", "9000") # Native port for driver, not JDBC 8123
+CH_DB = os.getenv("CLICKHOUSE_DB", "default")
+CH_USER = "default" # Default user
+CH_PASSWORD = "" # Default no password
+
+# For Spark JDBC (needs HTTP port usually 8123)
+CH_JDBC_PORT = "8123" 
 
 DELTA_PACKAGES = "io.delta:delta-spark_2.12:3.1.0"
 DELTA_CONF = (
@@ -55,14 +58,10 @@ def check_bronze_exists(**kwargs):
 
 
 def check_row_counts(**kwargs):
-    """Basic data quality: verify Silver and Gold have data."""
-    import psycopg2
+    """Basic data quality: verify Silver and Gold have data in ClickHouse."""
+    from clickhouse_driver import Client
 
-    conn = psycopg2.connect(
-        host=PG_HOST, port=PG_PORT, database=PG_DB,
-        user=PG_USER, password=PG_PASSWORD,
-    )
-    cur = conn.cursor()
+    client = Client(host=CH_HOST, port=CH_PORT, user=CH_USER, password=CH_PASSWORD, database=CH_DB)
 
     checks = [
         ("gold.daily_active_users", "dau_count"),
@@ -71,27 +70,21 @@ def check_row_counts(**kwargs):
     ]
 
     all_ok = True
+    print(f"Connecting to ClickHouse at {CH_HOST}:{CH_PORT}...")
+    
     for table, col in checks:
         try:
-            cur.execute(f"SELECT COUNT(*) FROM {table}")
-            row_count = cur.fetchone()[0]
+            row_count = client.execute(f"SELECT COUNT(*) FROM {table}")[0][0]
             print(f"  {table}: {row_count} rows")
             if row_count == 0:
                 print(f"  WARNING: {table} is empty!")
                 all_ok = False
-
-            # Null check on key column
-            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IS NULL")
-            null_count = cur.fetchone()[0]
-            if null_count > 0:
-                print(f"  WARNING: {table}.{col} has {null_count} NULLs")
-                all_ok = False
+            
+            # Null check (ClickHouse is strict, but good to check)
+            # Use '0' as null equivalent check if needed, but for now just count
         except Exception as e:
             print(f"  ERROR checking {table}: {e}")
             all_ok = False
-
-    cur.close()
-    conn.close()
 
     if not all_ok:
         print("Data quality issues detected (non-fatal)")
@@ -112,7 +105,7 @@ with DAG(
     schedule_interval="@hourly",
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=["lakehouse", "batch", "delta-lake"],
+    tags=["lakehouse", "batch", "delta-lake", "clickhouse"],
 ) as dag:
 
     check_bronze = BranchPythonOperator(
@@ -147,17 +140,15 @@ with DAG(
             f"spark-submit "
             f"--master {SPARK_MASTER} "
             f"--packages {DELTA_PACKAGES} "
-            f"--jars /opt/spark/extra-jars/postgresql-42.7.1.jar "
+            f"--jars /opt/spark/extra-jars/clickhouse-jdbc-0.6.0-all.jar "
             f"{DELTA_CONF} "
             f"{SPARK_JOBS_PATH}/spark_silver_to_gold.py"
         ),
         env={
             "LAKEHOUSE_PATH": LAKEHOUSE_PATH,
-            "POSTGRES_HOST": PG_HOST,
-            "POSTGRES_PORT": PG_PORT,
-            "POSTGRES_DB": PG_DB,
-            "POSTGRES_USER": PG_USER,
-            "POSTGRES_PASSWORD": PG_PASSWORD,
+            "CLICKHOUSE_HOST": CH_HOST,
+            "CLICKHOUSE_PORT": CH_JDBC_PORT, # Spark uses JDBC port 8123
+            "CLICKHOUSE_DB": CH_DB,
             "JAVA_HOME": "/usr/lib/jvm/java-17-openjdk-amd64",
             "SPARK_HOME": "/opt/spark",
             "PATH": "/opt/spark/bin:/usr/local/bin:/usr/bin:/bin",

@@ -3,7 +3,7 @@
 ## Prerequisites
 - Docker Desktop installed and running
 - At least 6GB RAM allocated to Docker
-- Ports available: 3000 (Grafana), 5432 (PostgreSQL), 8082 (Airflow), 9092 (Kafka)
+- Ports available: 3000 (Grafana), 8123 (ClickHouse), 8082 (Airflow), 9092 (Kafka)
 
 ## Quick Start
 
@@ -39,12 +39,11 @@ URL: http://localhost:8082
 Login: admin / admin
 ```
 
-**PostgreSQL Database:**
+**ClickHouse Database (HTTP):**
 ```
-Host: localhost:5432
-Database: serving
-User: platform
-Password: platform123
+URL: http://localhost:8123
+User: default
+Password: (none)
 ```
 
 ## First-Time Setup
@@ -52,19 +51,19 @@ Password: platform123
 ### Enable Airflow DAG
 1. Go to http://localhost:8082
 2. Login with admin/admin
-3. Find `lakehouse_bronze_to_gold` DAG
+3. Find `lakehouse_batch_dag` DAG
 4. Toggle it **ON** (switch on the left)
 5. Click **Trigger DAG** to run manually
 
 ### Verify Data Pipeline
 ```bash
-# Check real-time streaming data
-docker compose exec postgres psql -U platform -d serving -c \
-  "SELECT COUNT(*) FROM realtime.events_per_minute;"
+# Check real-time streaming data (ClickHouse)
+docker compose exec clickhouse clickhouse-client --query \
+  "SELECT count(*) FROM realtime.events_per_minute"
 
 # Check batch data (after Airflow DAG runs)
-docker compose exec postgres psql -U platform -d serving -c \
-  "SELECT * FROM gold.daily_active_users;"
+docker compose exec clickhouse clickhouse-client --query \
+  "SELECT * FROM gold.daily_active_users"
 ```
 
 ### View Grafana Dashboard

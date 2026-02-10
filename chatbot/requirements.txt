@@ -1,0 +1,5 @@
+flask==3.0.0
+flask-cors==4.0.0
+groq>=0.13.0
+clickhouse-driver==0.2.6
+requests>=2.31.0

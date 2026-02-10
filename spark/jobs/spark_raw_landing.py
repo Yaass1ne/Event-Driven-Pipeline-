@@ -30,6 +30,11 @@ EVENT_SCHEMA = StructType([
     StructField("page", StringType(), True),
     StructField("timestamp", StringType(), False),
     StructField("source", StringType(), False),
+    # E-commerce fields
+    StructField("session_id", StringType(), False),
+    StructField("price", StringType(), True),  # String to handle null, cast to double later
+    StructField("category", StringType(), True),
+    StructField("product_id", StringType(), True),
 ])
 
 
@@ -69,6 +74,11 @@ def main():
             col("data.page").alias("page"),
             col("data.timestamp").cast(TimestampType()).alias("event_timestamp"),
             col("data.source").alias("source"),
+            # E-commerce fields
+            col("data.session_id").alias("session_id"),
+            col("data.price").cast("double").alias("price"),
+            col("data.category").alias("category"),
+            col("data.product_id").alias("product_id"),
             col("kafka_timestamp").alias("ingestion_timestamp"),
         )
         .withColumn("event_date", to_date(col("event_timestamp")))

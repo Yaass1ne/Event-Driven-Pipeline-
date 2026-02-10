@@ -11,11 +11,9 @@ x-spark-common: &spark-common
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     LAKEHOUSE_PATH: /data/lakehouse
     CHECKPOINT_PATH: /data/checkpoints
-    POSTGRES_HOST: postgres
-    POSTGRES_PORT: "5432"
-    POSTGRES_DB: serving
-    POSTGRES_USER: platform
-    POSTGRES_PASSWORD: platform123
+    CLICKHOUSE_HOST: clickhouse
+    CLICKHOUSE_PORT: "8123"
+    CLICKHOUSE_DB: default
     SPARK_HOME: /opt/spark
   networks:
     - platform-net
@@ -95,30 +93,57 @@ services:
     networks:
       - platform-net
 
-  # ---------- PostgreSQL (serving store + airflow metadata) ----------
-  postgres:
-    image: postgres:15-alpine
-    hostname: postgres
-    container_name: postgres
+  # ---------- ClickHouse (Serving Store) ----------
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    hostname: clickhouse
+    container_name: clickhouse
     ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: platform
-      POSTGRES_PASSWORD: platform123
-      POSTGRES_DB: serving
-    command: postgres -c shared_buffers=64MB -c work_mem=4MB -c max_connections=50
+      - "8123:8123"
+      - "9000:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - clickhouse-data:/var/lib/clickhouse
+      - ./sql/clickhouse_init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U platform -d serving"]
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     deploy:
       resources:
         limits:
-          memory: 192M
+          memory: 1024M
+    networks:
+      - platform-net
+
+  # ---------- MySQL (Airflow Metadata) ----------
+  mysql:
+    image: mysql:8.0
+    hostname: mysql
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: serving
+      MYSQL_USER: platform
+      MYSQL_PASSWORD: platform123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./sql/mysql_init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
     networks:
       - platform-net
 
@@ -135,7 +160,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 896M
+          memory: 1536M
     restart: on-failure
 
   spark-fast-agg:
@@ -146,13 +171,34 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
-      postgres:
+      clickhouse:
         condition: service_healthy
-    command: ["bash", "-c", "sleep 20 && /opt/spark/bin/spark-submit --master 'local[2]' --driver-memory 512m --conf spark.sql.shuffle.partitions=2 --packages io.delta:delta-spark_2.12:3.1.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 --jars /opt/spark/extra-jars/postgresql-42.7.1.jar --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.driver.extraJavaOptions=-Divy.cache.dir=/tmp/.ivy2 /opt/spark-jobs/spark_fast_agg.py"]
+    command: ["bash", "-c", "sleep 20 && /opt/spark/bin/spark-submit --master 'local[2]' --driver-memory 512m --conf spark.sql.shuffle.partitions=2 --packages io.delta:delta-spark_2.12:3.1.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,com.clickhouse:clickhouse-jdbc:0.4.6 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.driver.extraJavaOptions=-Divy.cache.dir=/tmp/.ivy2 /opt/spark-jobs/spark_fast_agg.py"]
     deploy:
       resources:
         limits:
-          memory: 896M
+          memory: 1536M
+    restart: on-failure
+
+  # ---------- Anomaly Detector (Real-time Monitoring) ----------
+  spark-anomaly-detector:
+    <<: *spark-common
+    container_name: spark-anomaly-detector
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+    command: ["bash", "-c", "sleep 25 && /opt/spark/bin/spark-submit --master 'local[2]' --driver-memory 512m --conf spark.sql.shuffle.partitions=2 --packages io.delta:delta-spark_2.12:3.1.0,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 --jars /opt/spark/extra-jars/clickhouse-jdbc-0.6.0-all.jar --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.driver.extraJavaOptions=-Divy.cache.dir=/tmp/.ivy2 /opt/spark-jobs/spark_anomaly_detector.py"]
+    environment:
+      <<: *spark-env
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
     restart: on-failure
 
   # ---------- Grafana (Dashboard) ----------
@@ -166,13 +212,13 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=http://localhost:3000
-      - GF_INSTALL_PLUGINS=
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
     depends_on:
-      postgres:
+      clickhouse:
         condition: service_healthy
     deploy:
       resources:
@@ -197,11 +243,34 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: user-events
       EVENTS_PER_SECOND: "5"
-      NUM_USERS: "100"
+      NUM_USERS: "1000"
     deploy:
       resources:
         limits:
           memory: 48M
+    restart: on-failure
+    networks:
+      - platform-net
+
+  # ---------- Chatbot (Natural Language Analytics) ----------
+  chatbot:
+    build:
+      context: ./chatbot
+      dockerfile: Dockerfile
+    container_name: chatbot
+    ports:
+      - "5000:5000"
+    environment:
+      GROQ_API_KEY: 
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "9000"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     restart: on-failure
     networks:
       - platform-net
@@ -211,24 +280,31 @@ services:
     build:
       context: ./airflow
       dockerfile: Dockerfile
+    user: root
     container_name: airflow-init
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
     environment: &airflow-env
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://platform:platform123@postgres:5432/serving
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+mysqldb://platform:platform123@mysql:3306/serving
       AIRFLOW__CORE__FERNET_KEY: "zTvhk_5uELEhBMKBab3dVLRUZCjMBkEpGbNqj5GU1ac="
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "300"
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "30"
+      AIRFLOW__SCHEDULER__PARSING_PROCESSES: "2"
+      AIRFLOW__CORE__PARALLELISM: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "8"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+      AIRFLOW__WEBSERVER__WORKERS: "2"
+      AIRFLOW__WEBSERVER__WORKER_REFRESH_INTERVAL: "1800"
       LAKEHOUSE_PATH: /data/lakehouse
       CHECKPOINT_PATH: /data/checkpoints
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: serving
-      POSTGRES_USER: platform
-      POSTGRES_PASSWORD: platform123
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: default
     command: ["bash", "-c", "airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true"]
     volumes:
       - lakehouse-data:/data/lakehouse
@@ -246,6 +322,7 @@ services:
     build:
       context: ./airflow
       dockerfile: Dockerfile
+    user: root
     container_name: airflow-webserver
     depends_on:
       airflow-init:
@@ -268,7 +345,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 768M
     restart: on-failure
     networks:
       - platform-net
@@ -277,6 +354,7 @@ services:
     build:
       context: ./airflow
       dockerfile: Dockerfile
+    user: root
     container_name: airflow-scheduler
     depends_on:
       airflow-init:
@@ -291,7 +369,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1280M
+          memory: 2048M
     restart: on-failure
     networks:
       - platform-net
@@ -299,7 +377,8 @@ services:
 volumes:
   lakehouse-data:
   spark-checkpoints:
-  postgres-data:
+  clickhouse-data:
+  mysql-data:
   grafana-data:
 
 networks:

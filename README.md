@@ -1,17 +1,18 @@
-# Lakehouse Streaming Data Platform
+# 🛒 E-Commerce Real-Time Analytics Platform
 
-A complete end-to-end lakehouse platform implementing the Lambda Architecture pattern with real-time streaming and batch processing.
+A complete end-to-end lakehouse platform for e-commerce analytics with **AI-powered chatbot**, **real-time anomaly detection**, and **automated dashboard management**.
 
-**Producer → Kafka → Spark Streaming → Delta Lake → Airflow → PostgreSQL → Grafana**
+**Producer → Kafka → Spark Streaming → Delta Lake → Airflow → ClickHouse → Grafana + AI Chatbot**
 
 ---
 
 ## 🎯 Quick Start
 
 ### Prerequisites
-- Docker Desktop with **6GB RAM** allocated
+- Docker Desktop with **8GB RAM** allocated
 - Docker Compose v2
-- ~10 GB disk space
+- ~15 GB disk space
+- Groq API key (free at https://console.groq.com)
 
 ### Start the Platform
 ```bash
@@ -19,266 +20,536 @@ cd <your-project-directory>
 docker compose up -d
 ```
 
-**Wait 1-2 minutes** for all services to initialize.
+**Wait 2-3 minutes** for all services to initialize.
 
-### Access Dashboards
+### Access Services
 
-**Grafana (Real-Time Dashboards):**
-```
-URL: http://localhost:3000
-Login: admin / admin
-```
-
-**Airflow (Batch Orchestration):**
-```
-URL: http://localhost:8082
-Login: admin / admin
-```
+| Service | URL | Credentials | Purpose |
+|---------|-----|-------------|---------|
+| **🤖 AI Chatbot** | http://localhost:5000 | - | Query data & modify dashboards |
+| **📊 Grafana** | http://localhost:3000 | admin / admin | Real-time dashboards |
+| **⚙️ Airflow** | http://localhost:8082 | admin / admin | Batch orchestration |
+| **💾 ClickHouse** | localhost:8123 (HTTP) | default / - | Analytics database |
 
 ---
 
-## 📊 Features
+## ✨ Key Features
 
-### Real-Time Layer (Speed)
-- **Kafka** streaming user events (5/sec, growing user base)
-- **Spark Streaming** processing events every 30 seconds
-- **PostgreSQL** real-time aggregations (minute-by-minute)
-- **Grafana** dashboards auto-refreshing every 10 seconds
+### 🤖 AI-Powered Chatbot (NEW!)
+**Natural language interface** to query data and modify Grafana dashboards:
 
-### Batch Layer (Accuracy)
-- **Delta Lake** Bronze/Silver/Gold architecture (ACID-compliant)
-- **Airflow** orchestrating daily transformations
-- **PostgreSQL** serving business KPIs
-- **Grafana** historical analytics panels
+**Data Queries:**
+- "What was revenue yesterday?"
+- "Show conversion rate"
+- "Top 5 categories by sales"
 
-### What's Monitored
-- Daily Active Users (DAU)
-- Conversion Rate (purchase %)
-- Events by source (Mobile vs Web)
-- Top pages by purchases
-- Real-time event streams
-- Login activity by source
+**Dashboard Modifications:**
+- "Change all charts to show last 7 days"
+- "Add a pie chart for cart abandonment"
+- "Rename revenue panel to Daily Revenue"
+- "Change conversion chart to bar chart"
+
+👉 **[Full Chatbot Guide](documentation/CHATBOT.md)**
+
+### 🚨 Real-Time Anomaly Detection (NEW!)
+**Intelligent monitoring** with Slack alerts:
+- Traffic spikes/drops (>2x or <0.5x baseline)
+- Revenue anomalies (>2x or <0.5x expected)
+- Conversion rate drops (below 1%)
+- Zero purchase alerts
+
+👉 **[Anomaly Detection Setup](documentation/ANOMALY_DETECTION_DEPLOYMENT.md)**
+
+### 🛒 E-Commerce Analytics (NEW!)
+**Realistic e-commerce metrics** with 1,000 users:
+- **Revenue tracking**: Daily revenue, AOV, total purchases
+- **Category analysis**: 8 product categories with sales trends
+- **Cart abandonment**: Session tracking with abandonment rates
+- **Conversion rate**: Unique buyers / DAU (realistic 2-5%)
+- **Session management**: 30-minute timeout, cart persistence
+
+### ⚡ Real-Time Layer (Speed)
+- **Kafka** streaming 5 events/sec from 1,000 users
+- **Spark Streaming** processing every 30 seconds
+- **ClickHouse** minute-by-minute aggregations
+- **Grafana** auto-refresh every 10 seconds
+
+### 📊 Batch Layer (Accuracy)
+- **Delta Lake** Bronze/Silver/Gold architecture (ACID)
+- **Airflow** hourly batch transformations
+- **ClickHouse** serving business KPIs
+- **Grafana** historical analytics
 
 ---
 
-## 📚 Documentation
+## 📊 Business Metrics
 
-### Setup & Running
-- **[Quick Start Guide](documentation/setup/RUN.md)** - How to run the project
-- **[Troubleshooting](documentation/setup/TROUBLESHOOTING.md)** - Common issues and fixes
+### Real-Time Metrics
+- **Events per minute** by type (login, view, add_to_cart, purchase, logout)
+- **Revenue per minute** with purchase count
+- **Category velocity** (real-time sales by category)
 
-### Architecture
-- **[System Architecture](documentation/architecture/ARCHITECTURE.md)** - Design decisions and data flow
-- **[Component Guide](documentation/architecture/COMPONENT_GUIDE.md)** - Detailed explanation of each component
-
-### Usage
-- **[Example Queries](documentation/queries/EXAMPLE_QUERIES.md)** - SQL queries for data exploration
+### Daily KPIs (Gold Layer)
+- **Daily Active Users (DAU)** - Unique users per day
+- **Revenue Daily** - Total revenue, purchases, average order value
+- **Conversion Rate** - Unique buyers / DAU
+- **Category Sales** - Units sold and revenue by category
+- **Cart Abandonment** - Sessions with cart vs. completed purchases
+- **Events by Source** - Mobile vs. Web distribution
 
 ---
 
 ## 🏗️ Architecture Overview
 
 ```
-Producer (Events) → Kafka (user-events)
-                        │
-        ┌───────────────┴────────────────┐
-        │                                │
-        ▼                                ▼
-Spark Raw Landing              Spark Fast Aggregation
-        │                                │
-        ▼                                ▼
-Delta Bronze                  PostgreSQL (realtime.*)
-        │
-        ▼
-    Airflow DAG
-        │
-        ├─► Delta Silver (cleaned)
-        │
-        └─► Delta Gold (aggregated)
-                │
-                ▼
-        PostgreSQL (gold.*)
-                │
-                ▼
-            Grafana
+Producer (1000 users) → Kafka (user-events topic)
+                              │
+              ┌───────────────┴─────────────────┬──────────────────┐
+              │                                 │                  │
+              ▼                                 ▼                  ▼
+    Spark Raw Landing              Spark Fast Aggregation   Spark Anomaly
+    (Bronze ingestion)             (Real-time metrics)      (Alerts)
+              │                                 │                  │
+              ▼                                 ▼                  ▼
+      Delta Bronze                    ClickHouse realtime.*   Slack Webhook
+              │
+              ▼
+         Airflow DAG
+         (Hourly)
+              │
+              ├─► Delta Silver (cleaned, validated)
+              │
+              └─► Delta Gold (business KPIs)
+                      │
+                      ▼
+              ClickHouse gold.*
+                      │
+                      ├──────────────┐
+                      ▼              ▼
+                  Grafana      AI Chatbot
+                (Dashboards)   (NL queries +
+                               Dashboard mods)
 ```
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| **Message Broker** | Apache Kafka 7.5.3 |
-| **Stream Processing** | Apache Spark 3.5.1 |
-| **Data Lake** | Delta Lake 3.1.0 |
-| **Batch Orchestration** | Apache Airflow 2.8.1 |
-| **Serving Database** | PostgreSQL 15 |
-| **Visualization** | Grafana 10.2.0 |
-| **Orchestration** | Docker Compose |
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Events** | Python Producer | E-commerce event simulation |
+| **Streaming** | Apache Kafka 7.5.3 | Message broker |
+| **Processing** | Apache Spark 3.5.1 | Stream & batch processing |
+| **Storage** | Delta Lake 3.1.0 | ACID data lake |
+| **Orchestration** | Apache Airflow 2.8.1 | Batch scheduling |
+| **Analytics DB** | ClickHouse 23.8 | OLAP serving layer |
+| **Visualization** | Grafana 10.2.0 | Dashboards |
+| **AI/ML** | Groq (LLaMA 3.3 70B) | Chatbot NL→SQL |
+| **Alerts** | Slack Webhooks | Anomaly notifications |
+| **Metadata** | MySQL 8.0 | Airflow backend |
 
 ---
 
-## 📋 Service Ports
+## 🚀 Getting Started
 
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Grafana | http://localhost:3000 | admin / admin |
-| Airflow | http://localhost:8082 | admin / admin |
-| PostgreSQL | localhost:5432 | platform / platform123 |
-| Kafka | localhost:29092 | - |
+### 1. Clone and Configure
+
+```bash
+cd "EventDriven Click"
+```
+
+**Set Groq API Key** (for chatbot):
+```bash
+# In docker-compose.yml, update GROQ_API_KEY in chatbot service
+# Get free API key at: https://console.groq.com
+```
+
+**Optional - Slack Alerts**:
+```bash
+# In docker-compose.yml, update SLACK_WEBHOOK_URL in spark-anomaly-detector
+# See: documentation/SLACK_SETUP.md
+```
+
+### 2. Start Services
+
+```bash
+docker compose up -d
+```
+
+Monitor startup:
+```bash
+docker compose logs -f producer | head -20
+```
+
+### 3. Verify Data Flow
+
+**Check real-time data (after 2 minutes):**
+```bash
+curl -s "http://localhost:8123" --data "SELECT count(*) FROM realtime.events_per_minute"
+```
+
+**Check producer stats:**
+```bash
+docker compose logs producer --tail 5 | grep "Sent"
+```
+
+### 4. Trigger Batch Pipeline
+
+**Via Airflow UI:**
+1. Open http://localhost:8082 (admin/admin)
+2. Enable `lakehouse_batch_pipeline` DAG
+3. Click **Trigger DAG**
+
+**Or via command:**
+```bash
+docker compose exec spark-raw-landing spark-submit \
+  --master local[2] --driver-memory 512m \
+  --packages io.delta:delta-spark_2.12:3.1.0 \
+  /opt/spark-jobs/spark_bronze_to_silver.py
+```
+
+### 5. Explore with Chatbot
+
+1. Open http://localhost:5000
+2. Try: **"What was revenue yesterday?"**
+3. Try: **"Change all charts to show last 7 days"**
+4. Try: **"Add a pie chart for cart abandonment"**
 
 ---
 
-## 🔍 Verify Installation
+## 📚 Documentation
 
-### Check All Services
+### Quick Guides
+- **[🤖 Chatbot Guide](documentation/CHATBOT.md)** - How to use the AI chatbot
+- **[🚀 Quick Start](documentation/setup/RUN.md)** - Detailed startup guide
+- **[🔧 Troubleshooting](documentation/setup/TROUBLESHOOTING.md)** - Common issues
+
+### Architecture & Design
+- **[🏗️ System Architecture](documentation/architecture/ARCHITECTURE.md)** - Design decisions
+- **[📦 Component Guide](documentation/architecture/COMPONENT_GUIDE.md)** - Service details
+- **[🔄 Data Pipeline](documentation/architecture/DATA_PIPELINE.md)** - Data flow
+
+### Advanced Features
+- **[🚨 Anomaly Detection](documentation/ANOMALY_DETECTION_DEPLOYMENT.md)** - Alert setup
+- **[💬 Slack Integration](documentation/SLACK_SETUP.md)** - Webhook configuration
+- **[📊 Example Queries](documentation/queries/EXAMPLE_QUERIES.md)** - SQL examples
+
+---
+
+## 🎨 AI Chatbot Examples
+
+### Data Queries
+```
+User: "What was revenue yesterday?"
+Bot: Yesterday's revenue was $15,234.56 from 287 purchases, with an average order value of $53.08.
+```
+
+### Dashboard Modifications
+```
+User: "Change all charts to show last 7 days"
+Bot: ✅ Changed time range for all panels to 7d
+     🔗 View updated dashboard: http://grafana:3000/d/lakehouse-overview
+```
+
+### Adding New Visualizations
+```
+User: "Add a pie chart for cart abandonment"
+Bot: ✅ Added new piechart panel: 'Cart Abandonment'
+     🔗 View updated dashboard: http://grafana:3000/d/lakehouse-overview
+```
+
+---
+
+## 📊 Sample Dashboard Panels
+
+1. **Daily Active Users** - Stat panel showing unique users
+2. **Conversion Rate** - Percentage of users who purchase
+3. **Total Revenue Today** - Dollar amount with sparkline
+4. **Total Events** - Event count across all types
+5. **Real-Time Event Stream** - Time series by event type
+6. **Revenue Per Minute** - Real-time revenue tracking
+7. **Revenue by Category** - Pie chart (8 categories)
+8. **Top Categories** - Bar chart by units sold
+
+---
+
+## 🔍 Data Validation
+
+### Check Gold Layer Metrics
+
+**Conversion Rate (should be 2-5%):**
+```bash
+curl -s "http://localhost:8123" --data "
+SELECT
+    event_date,
+    dau_count,
+    unique_buyers,
+    round(conversion_rate * 100, 2) as conv_pct
+FROM gold.conversion_rate_daily
+ORDER BY event_date DESC
+LIMIT 1 FORMAT Vertical"
+```
+
+**Revenue Breakdown:**
+```bash
+curl -s "http://localhost:8123" --data "
+SELECT
+    total_revenue,
+    total_purchases,
+    round(avg_order_value, 2) as aov
+FROM gold.revenue_daily
+ORDER BY event_date DESC
+LIMIT 1 FORMAT Vertical"
+```
+
+**Category Performance:**
+```bash
+curl -s "http://localhost:8123" --data "
+SELECT
+    category,
+    units_sold,
+    round(category_revenue, 2) as revenue
+FROM gold.category_sales_daily
+WHERE event_date = today()
+ORDER BY units_sold DESC
+FORMAT Pretty"
+```
+
+---
+
+## 🎯 Configuration
+
+### Environment Variables
+
+**Producer Configuration:**
+```yaml
+EVENTS_PER_SECOND: "5"        # Event generation rate
+NUM_USERS: "1000"             # User pool size
+USER_GROWTH_RATE: "10"        # New users per hour
+```
+
+**Anomaly Detector:**
+```yaml
+SLACK_WEBHOOK_URL: "your-webhook-url"  # Slack alerts
+```
+
+**Chatbot:**
+```yaml
+GROQ_API_KEY: "your-groq-api-key"      # LLaMA 3.3 70B access
+GRAFANA_URL: "http://grafana:3000"
+GRAFANA_USER: "admin"
+GRAFANA_PASSWORD: "admin"
+```
+
+---
+
+## 🔧 Operational Commands
+
+### Service Management
+
+**View all services:**
 ```bash
 docker compose ps
 ```
-All services should show `Up` or `Up (healthy)`.
 
-### Query Real-Time Data
+**Restart specific service:**
 ```bash
-docker compose exec postgres psql -U platform -d serving -c \
-  "SELECT COUNT(*) FROM realtime.events_per_minute;"
+docker compose restart producer
+docker compose restart chatbot
 ```
 
-### Check Lakehouse Size
+**View logs:**
 ```bash
-docker exec spark-raw-landing sh -c "du -sh /data/lakehouse/*"
-```
-Expected: Bronze 100-500MB, Silver 5-10MB, Gold 5-10MB
-
----
-
-## 🚦 First-Time Setup
-
-### 1. Enable Airflow DAG
-1. Go to http://localhost:8082
-2. Toggle **ON** the `lakehouse_bronze_to_gold` DAG
-3. Click **Trigger DAG** to run manually
-
-### 2. Wait for Data
-- **Real-time charts:** 5-10 minutes to populate
-- **Batch metrics:** After first Airflow DAG run (2-3 min)
-
----
-
-## 🛑 Stop/Restart
-
-**Stop services (keep data):**
-```bash
-docker compose down
+docker compose logs -f <service-name>
+docker compose logs -f producer | grep "Events"
 ```
 
-**Stop and remove all data:**
+**Clear data and restart:**
 ```bash
 docker compose down -v
+docker compose up -d
 ```
 
-**Restart a specific service:**
+### Data Management
+
+**Check lakehouse size:**
 ```bash
-docker compose restart <service-name>
+docker exec spark-raw-landing du -sh /data/lakehouse/*
 ```
 
-**Rebuild after code changes:**
+**Clear ClickHouse tables:**
 ```bash
-docker compose up -d --build
+docker compose exec clickhouse clickhouse-client --multiquery <<'SQL'
+TRUNCATE TABLE gold.revenue_daily;
+TRUNCATE TABLE gold.conversion_rate_daily;
+SQL
 ```
+
+---
+
+## 📈 Performance Characteristics
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Event throughput** | 5 events/sec | Configurable up to 100+ |
+| **End-to-end latency** | < 10 seconds | Kafka → ClickHouse |
+| **Batch processing** | 3-5 minutes | Bronze → Silver → Gold |
+| **Memory usage** | ~8 GB total | With all services |
+| **Storage growth** | ~300KB/min | Bronze layer |
+| **User pool** | 1,000 users | Growing at 10/hour |
+| **Conversion rate** | 2-5% | Realistic e-commerce |
+
+---
+
+## 🆘 Troubleshooting
+
+### Common Issues
+
+**1. Chatbot buttons not working**
+```bash
+# Clear browser cache and refresh
+# Or restart chatbot
+docker compose restart chatbot
+```
+
+**2. Conversion rate still 99%**
+```bash
+# Producer needs rebuild, not just restart
+docker compose stop producer
+docker compose build producer
+docker compose up -d producer
+```
+
+**3. No data in Grafana**
+```bash
+# Wait 5-10 minutes for data accumulation
+# Or trigger Airflow DAG manually
+```
+
+**4. Docker Desktop connectivity issues**
+```bash
+# Restart Docker Desktop application
+# Then: docker compose up -d --build
+```
+
+**5. Out of memory errors**
+```bash
+# Increase Docker Desktop RAM to 8GB
+# Settings → Resources → Memory
+```
+
+👉 **Full troubleshooting guide:** [TROUBLESHOOTING.md](documentation/setup/TROUBLESHOOTING.md)
 
 ---
 
 ## 🎓 Learn More
 
-- **Architecture deep-dive:** [ARCHITECTURE.md](documentation/architecture/ARCHITECTURE.md)
-- **Component details:** [COMPONENT_GUIDE.md](documentation/architecture/COMPONENT_GUIDE.md)
-- **Example queries:** [EXAMPLE_QUERIES.md](documentation/queries/EXAMPLE_QUERIES.md)
-- **Troubleshooting:** [TROUBLESHOOTING.md](documentation/setup/TROUBLESHOOTING.md)
+### Tutorials & Guides
+- **Lambda Architecture** - Combining Speed and Batch layers
+- **Delta Lake ACID** - Time travel and UPSERT operations
+- **ClickHouse OLAP** - Columnar storage and aggregations
+- **Spark Structured Streaming** - Micro-batch processing
+- **Grafana Provisioning** - Dashboard as code
 
----
-
-## 📊 Performance Characteristics
-
-- **Event throughput:** 5 events/sec (configurable up to 100+)
-- **End-to-end latency:** < 60 seconds (Kafka → PostgreSQL)
-- **Batch processing:** 2-3 minutes for daily aggregations
-- **Memory usage:** ~5-6 GB total (optimized for laptops)
-- **Storage growth:** ~200KB/min Bronze, ~100KB/day Gold
-
----
-
-## 🔧 Memory Optimization
-
-This platform is **memory-optimized** for development environments:
-- Spark runs in `local[2]` mode (saves ~2GB vs cluster mode)
-- All containers have memory limits
-- JVM heap sizes tuned per service
-- Total memory: ~5.3GB across 9 containers
-
-**Memory breakdown:**
-- ZooKeeper: 256M, Kafka: 512M, PostgreSQL: 192M
-- Spark jobs: 896M each (2 × 896M = 1.8GB)
-- Airflow: 384M webserver + 1280M scheduler
-- Producer: 48M, Grafana: 256M
+### Example Workflows
+1. **Add new KPI**: Silver → Gold transform → ClickHouse table → Grafana panel
+2. **Custom alert**: Modify anomaly thresholds in `spark_anomaly_detector.py`
+3. **New visualization**: Use chatbot to add panel, then customize in Grafana
 
 ---
 
 ## 📁 Project Structure
 
 ```
-├── docker-compose.yml              # Service orchestration
-├── README.md                       # This file
-├── documentation/                  # All documentation
+├── README.md                           # This file
+├── docker-compose.yml                  # Service orchestration
+├── documentation/                      # All guides
+│   ├── CHATBOT.md                     # AI chatbot usage guide
+│   ├── ANOMALY_DETECTION_DEPLOYMENT.md
+│   ├── SLACK_SETUP.md
 │   ├── setup/
-│   │   ├── RUN.md                 # Quick start guide
-│   │   └── TROUBLESHOOTING.md     # Common issues
 │   ├── architecture/
-│   │   ├── ARCHITECTURE.md        # System design
-│   │   └── COMPONENT_GUIDE.md     # Component details
 │   └── queries/
-│       └── EXAMPLE_QUERIES.md     # SQL examples
-├── producer/                       # Event generator
-│   ├── producer.py
+├── producer/                           # E-commerce event generator
+│   ├── producer.py                    # 1000 users, 8 categories
+│   ├── Dockerfile
 │   └── requirements.txt
-├── spark/                          # Streaming & batch jobs
+├── spark/                              # Streaming & batch jobs
 │   ├── Dockerfile
 │   └── jobs/
-│       ├── spark_raw_landing.py
-│       ├── spark_fast_agg.py
-│       ├── spark_bronze_to_silver.py
-│       └── spark_silver_to_gold.py
-├── airflow/                        # Batch orchestration
+│       ├── spark_raw_landing.py       # Bronze ingestion
+│       ├── spark_fast_agg.py          # Real-time metrics
+│       ├── spark_anomaly_detector.py  # Alert monitoring
+│       ├── spark_bronze_to_silver.py  # Data cleaning
+│       └── spark_silver_to_gold.py    # Business KPIs
+├── airflow/                            # Batch orchestration
 │   ├── Dockerfile
 │   └── dags/
-│       └── lakehouse_batch_dag.py
-├── grafana/                        # Dashboards
+│       └── lakehouse_batch_dag.py     # Hourly pipeline
+├── chatbot/                            # AI-powered assistant
+│   ├── app.py                         # Flask app + Groq API
+│   ├── requirements.txt
+│   └── Dockerfile
+├── grafana/                            # Dashboards
 │   └── provisioning/
 │       ├── datasources/
 │       └── dashboards/
+│           └── lakehouse-overview.json
 └── sql/
-    └── init.sql                    # PostgreSQL schema
+    ├── clickhouse_init.sql             # Schema + tables
+    └── mysql_init.sql                  # Airflow backend
 ```
 
 ---
 
-## 🎯 Use Cases
+## 🎯 Use Cases & Demonstrations
 
 This platform demonstrates:
-- ✅ Real-time event streaming with Kafka
-- ✅ Lakehouse architecture (Bronze/Silver/Gold)
-- ✅ Lambda Architecture (Speed + Batch layers)
-- ✅ ACID transactions with Delta Lake
-- ✅ Batch orchestration with Airflow
-- ✅ Real-time dashboards with Grafana
-- ✅ Growing user base simulation
-- ✅ Multi-source analytics (Mobile vs Web)
+
+✅ **Real-time streaming** with Kafka and Spark
+✅ **Lambda Architecture** (Speed + Batch layers)
+✅ **Lakehouse pattern** (Bronze/Silver/Gold)
+✅ **ACID transactions** with Delta Lake
+✅ **Batch orchestration** with Airflow
+✅ **OLAP analytics** with ClickHouse
+✅ **Real-time dashboards** with Grafana
+✅ **AI-powered insights** with LLaMA 3.3 70B
+✅ **Anomaly detection** with automated alerts
+✅ **Natural language** dashboard management
+✅ **E-commerce analytics** at scale (1000 users)
 
 ---
 
-## 🆘 Need Help?
+## 🤝 Contributing
 
-1. Check [TROUBLESHOOTING.md](documentation/setup/TROUBLESHOOTING.md)
-2. Review service logs: `docker compose logs <service-name>`
-3. Verify all services are healthy: `docker compose ps`
-4. Full restart: `docker compose down && docker compose up -d`
+To extend the platform:
+
+1. **Add new event types**: Update `producer/producer.py`
+2. **Create new KPIs**: Add transforms in `spark_silver_to_gold.py`
+3. **Custom dashboards**: Add JSON in `grafana/provisioning/dashboards/`
+4. **New alerts**: Extend `spark_anomaly_detector.py`
+5. **Chatbot features**: Modify `chatbot/app.py`
+
+---
+
+## 📄 License
+
+MIT License - Feel free to use for learning and commercial projects.
+
+---
+
+## 🌟 Highlights
+
+- **Production-ready architecture** following industry best practices
+- **Fully containerized** - one command to start everything
+- **Memory optimized** - runs on standard development machines
+- **Realistic data** - simulates actual e-commerce behavior
+- **AI-enhanced** - natural language interface to your data
+- **Self-documenting** - comprehensive guides and examples
+- **Extensible** - easy to add new metrics and features
+
+---
+
+**Built with ❤️ for the data engineering community**
+
+Questions? Check [TROUBLESHOOTING.md](documentation/setup/TROUBLESHOOTING.md) or review service logs.

@@ -1,0 +1,356 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "orange", "value": 5},
+              {"color": "red", "value": 10}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "textMode": "value_and_name",
+        "text": {"titleSize": 18, "valueSize": 48}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+          "format": 1,
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"Active Alerts\" FROM realtime.anomalies WHERE detected_at >= now() - INTERVAL 1 HOUR AND acknowledged = 0",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Alerts (Last Hour)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 5}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+          "format": 1,
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"Critical Alerts\" FROM realtime.anomalies WHERE severity = 'critical' AND detected_at >= now() - INTERVAL 24 HOUR",
+          "refId": "A"
+        }
+      ],
+      "title": "Critical Alerts (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false}
+          },
+          "mappings": []
+        }
+      },
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true,
+          "values": ["value"]
+        },
+        "pieType": "pie",
+        "tooltip": {"mode": "single", "sort": "none"},
+        "displayLabels": ["percent"]
+      },
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+          "format": 1,
+          "rawQuery": true,
+          "rawSql": "SELECT severity, count(*) as value FROM realtime.anomalies WHERE detected_at >= now() - INTERVAL 24 HOUR GROUP BY severity",
+          "refId": "A"
+        }
+      ],
+      "title": "Alerts by Severity (24h)",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false}
+          },
+          "mappings": []
+        }
+      },
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true,
+          "values": ["value"]
+        },
+        "pieType": "donut",
+        "tooltip": {"mode": "single", "sort": "none"},
+        "displayLabels": ["name", "percent"]
+      },
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+          "format": 1,
+          "rawQuery": true,
+          "rawSql": "SELECT anomaly_type, count(*) as value FROM realtime.anomalies WHERE detected_at >= now() - INTERVAL 24 HOUR GROUP BY anomaly_type ORDER BY value DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Alerts by Type (24h)",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "custom": {
+            "align": "left",
+            "cellOptions": {"type": "auto"},
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null}
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "severity"},
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {"type": "color-background"}
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {"type": "value", "value": "critical", "display": {"color": "red", "text": "🔴 CRITICAL"}},
+                  {"type": "value", "value": "high", "display": {"color": "orange", "text": "🟠 HIGH"}},
+                  {"type": "value", "value": "medium", "display": {"color": "yellow", "text": "🟡 MEDIUM"}},
+                  {"type": "value", "value": "low", "display": {"color": "blue", "text": "🔵 LOW"}}
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "anomaly_type"},
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {"type": "value", "value": "revenue_drop", "display": {"text": "💰 Revenue Drop"}},
+                  {"type": "value", "value": "traffic_spike", "display": {"text": "📈 Traffic Spike"}},
+                  {"type": "value", "value": "traffic_drop", "display": {"text": "📉 Traffic Drop"}},
+                  {"type": "value", "value": "cart_abandonment_spike", "display": {"text": "🛒 Cart Abandonment"}},
+                  {"type": "value", "value": "conversion_drop", "display": {"text": "📊 Conversion Drop"}},
+                  {"type": "value", "value": "data_quality", "display": {"text": "⚠️ Data Quality"}},
+                  {"type": "value", "value": "category_imbalance", "display": {"text": "⚖️ Category Imbalance"}}
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 8},
+      "id": 5,
+      "options": {
+        "cellHeight": "md",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {"displayName": "detected_at", "desc": true}
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+          "format": 1,
+          "rawQuery": true,
+          "rawSql": "SELECT \n  formatDateTime(detected_at, '%Y-%m-%d %H:%M:%S') as detected_at,\n  severity,\n  anomaly_type,\n  description,\n  metric_value as current,\n  expected_value as expected,\n  if(acknowledged = 1, '✅ Acked', '❌ Active') as status\nFROM realtime.anomalies \nWHERE detected_at >= now() - INTERVAL 6 HOUR\nORDER BY detected_at DESC\nLIMIT 100",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent Alerts (Last 6 Hours)",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "clickhouse"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Alert Count",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {"tooltip": false, "viz": false, "legend": false},
+            "lineWidth": 1,
+            "scaleDistribution": {"type": "linear"}
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "critical"},
+            "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "high"},
+            "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "medium"},
+            "properties": [{"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}]
+          }
+        ]
+      },
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 20},
+      "id": 6,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.8,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": ["sum"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "normal",
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": {"type": "grafana-clickhouse-datasource", "uid": "clickhouse"},
+          "format": 0,
+          "rawQuery": true,
+          "rawSql": "SELECT \n  toStartOfHour(detected_at) as time,\n  severity,\n  count(*) as value\nFROM realtime.anomalies \nWHERE detected_at >= now() - INTERVAL 24 HOUR\nGROUP BY time, severity\nORDER BY time, severity",
+          "refId": "A"
+        }
+      ],
+      "title": "Anomaly Timeline (Last 24 Hours)",
+      "type": "barchart"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["anomaly-detection", "monitoring", "alerts"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "🚨 Anomaly Detection & Alerts",
+  "uid": "anomaly-monitoring",
+  "version": 0,
+  "weekStart": ""
+}

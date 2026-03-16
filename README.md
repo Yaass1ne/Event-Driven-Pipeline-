@@ -1,9 +1,23 @@
-# 🛒 E-Commerce Real-Time Analytics Platform
+# Lakehouse Streaming Data Platform
 
-A complete end-to-end lakehouse platform for e-commerce analytics with **AI-powered chatbot**, **real-time anomaly detection**, and **automated dashboard management**.
+> End-to-end Lambda Architecture with real-time streaming and batch processing — fully Dockerized, runs locally on 6GB RAM.
 
-**Producer → Kafka → Spark Streaming → Delta Lake → Airflow → ClickHouse → Grafana + AI Chatbot**
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
+![Apache Kafka](https://img.shields.io/badge/Kafka-231F20?style=flat-square&logo=apache-kafka&logoColor=white)
+![Apache Spark](https://img.shields.io/badge/Spark_3.5-E25A1C?style=flat-square&logo=apache-spark&logoColor=white)
+![Airflow](https://img.shields.io/badge/Airflow-017CEE?style=flat-square&logo=apache-airflow&logoColor=white)
+![Grafana](https://img.shields.io/badge/Grafana-F46800?style=flat-square&logo=grafana&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
 
+**Pipeline:** `Producer → Kafka → Spark Streaming → Delta Lake → Airflow → PostgreSQL → Grafana`
+
+### Key specs
+- Event throughput: 5 events/sec (configurable to 100+)
+- End-to-end latency: < 60 seconds
+- Bronze/Silver/Gold Delta Lake architecture (ACID-compliant)
+- Memory-optimized: ~5.3GB total across 9 containers
+
+---
 ---
 
 ## 🎯 Quick Start
